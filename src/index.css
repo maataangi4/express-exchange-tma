@@ -1,0 +1,195 @@
+@font-face {
+  font-family: 'Aeonik';
+  src: url('./fonts/Aeonik-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Aeonik';
+  src: url('./fonts/Aeonik-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --app-safe-top: 36px;
+    --app-safe-bottom: 0px;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    font-family: 'Aeonik', system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  .app-shell {
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
+    padding-top: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .app-safe-spacer {
+    flex-shrink: 0;
+    width: 100%;
+    height: var(--app-safe-top, 0px);
+    background: transparent;
+    pointer-events: none;
+  }
+
+  .app-bottom-nav {
+    padding-bottom: calc(1rem + var(--app-safe-bottom));
+  }
+
+  .app-tab-viewport {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .app-tab-track {
+    display: flex;
+    height: 100%;
+    transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+
+  .app-tab-panel {
+    flex-shrink: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-main-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    margin-top: calc(-1 * var(--app-safe-top, 0px));
+    padding-top: var(--app-safe-top, 0px);
+    background: transparent;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-services-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    margin-top: calc(-1 * var(--app-safe-top, 0px));
+    padding-top: var(--app-safe-top, 0px);
+    background: transparent;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ai-sparkle-btn {
+    border: none;
+  }
+
+  .ai-sparkle-btn--dark {
+    background-color: #d0fd00 !important;
+  }
+
+  .ai-sparkle-btn--dark svg {
+    color: #000000 !important;
+    stroke: #000000 !important;
+  }
+
+  .ai-sparkle-btn--light {
+    background-color: #000000 !important;
+  }
+
+  .ai-sparkle-btn--light svg {
+    color: #ffffff !important;
+    stroke: #ffffff !important;
+  }
+
+  .services-form-scroll {
+    padding-bottom: max(10rem, calc(6rem + var(--app-safe-bottom)));
+    scroll-padding-bottom: max(12rem, calc(8rem + var(--app-safe-bottom)));
+  }
+
+  .profile-menu-item {
+    -webkit-tap-highlight-color: transparent;
+  }
+  @media (hover: none) and (pointer: coarse) {
+    .profile-menu-item:hover {
+      background-color: inherit !important;
+    }
+  }
+
+  .app-modal-backdrop {
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(4px);
+  }
+
+  .app-modal-backdrop-in {
+    animation: app-modal-fade-in 0.28s ease-out forwards;
+  }
+
+  .app-modal-backdrop-out {
+    animation: app-modal-fade-out 0.24s ease-in forwards;
+  }
+
+  .app-modal-sheet-in {
+    animation: app-modal-slide-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  .app-modal-sheet-out {
+    animation: app-modal-slide-out 0.26s cubic-bezier(0.4, 0, 1, 1) forwards;
+  }
+
+  @keyframes app-modal-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes app-modal-fade-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+
+  @keyframes app-modal-slide-in {
+    from { transform: translateY(100%); opacity: 0.6; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  @keyframes app-modal-slide-out {
+    from { transform: translateY(0); opacity: 1; }
+    to { transform: translateY(100%); opacity: 0.5; }
+  }
+
+  @media (min-width: 640px) {
+    @keyframes app-modal-slide-in {
+      from { transform: translateY(16px) scale(0.98); opacity: 0; }
+      to { transform: translateY(0) scale(1); opacity: 1; }
+    }
+    @keyframes app-modal-slide-out {
+      from { transform: translateY(0) scale(1); opacity: 1; }
+      to { transform: translateY(16px) scale(0.98); opacity: 0; }
+    }
+  }
+}
