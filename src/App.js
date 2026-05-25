@@ -49,7 +49,7 @@ import {
 import { getInitialRatesState, saveRatesCache, loadRatesCache } from './ratesStorage';
 import { enrichMarketDataWithTrend } from './ratesHistory';
 import { 
-  MapPin, CheckCircle, ArrowDown, ArrowDownUp, Locate, PenLine, Clock, CheckCircle2, Truck, ShieldCheck, ChevronDown,
+  MapPin, Check, CheckCircle, ArrowDown, ArrowDownUp, Locate, PenLine, Clock, CheckCircle2, Truck, ShieldCheck, ChevronDown,
   Loader2, X, Info, Plus, Wallet, Lock, AlertCircle, 
   ChevronRight, Sparkles, Coins, Calendar, Search, Trash2, Car, Building, Sun, Moon, ArrowLeft,
   Home, Package, User, PlusCircle, TrendingUp, TrendingDown,
@@ -2489,7 +2489,12 @@ const useExchangeStore = create((set, get) => ({
         if (!val || val <= 0) return false;
 
         if (isSpreadPayUsdtMode(o.give, o.get)) {
-            return val >= 100 && Boolean(String(o.getAmount || '').trim());
+            const getVal = parseFloat(o.getAmount);
+            if (!getVal || getVal < MIN_FOREIGN_GET_ARS_PAIRS) return false;
+            if (o.get === 'USD' || o.get === 'EUR') {
+                return getVal === normalizeUsdCashAmount(getVal);
+            }
+            return true;
         }
         if (!o.getAmount) return false;
         
@@ -4244,7 +4249,24 @@ const ExchangeApp = () => {
 
   const spreadUsdGetEditStartRef = useRef({});
   const spreadPayUsdtBypassBlurRef = useRef({});
+  const amountPointerTargetRef = useRef(null);
   const userOpenInflightRef = useRef(null);
+
+  useEffect(() => {
+      const onPointerDown = (e) => {
+          amountPointerTargetRef.current = e.target;
+      };
+      document.addEventListener('pointerdown', onPointerDown, true);
+      return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, []);
+
+  const isMovingToSiblingAmountInput = (orderId, blurEl) => {
+      const pt = amountPointerTargetRef.current;
+      if (!pt || !blurEl) return false;
+      const card = blurEl.closest('[data-order-card]');
+      if (!card || card.getAttribute('data-order-card') !== String(orderId)) return false;
+      return Boolean(pt.closest('[data-exchange-amount]') && card.contains(pt));
+  };
 
   const syncWalletAndBase = (tg, user) => {
       if (!user?.id) return;
@@ -4508,21 +4530,25 @@ const ExchangeApp = () => {
   }, [activeTab]);
 
   useEffect(() => {
-      if (!openDropdown) return;
-      const handleClickOutside = (e) => {
+      const handlePointerOutside = (e) => {
           if (e.target.closest('[data-currency-option]')) return;
-          if (Date.now() - dropdownOpenedAtRef.current < 80) return;
-          if (
-              !e.target.closest(
-                  '[data-currency-dropdown], [data-delivery-dropdown], [data-currency-pill]'
-              )
-          ) {
+          if (openDropdown && Date.now() - dropdownOpenedAtRef.current < 80) return;
+          const insideInteractive = e.target.closest(
+              '[data-currency-dropdown], [data-delivery-dropdown], [data-currency-pill], [data-exchange-amount], [data-bonus-toggle]'
+          );
+          if (openDropdown && !insideInteractive) {
               setOpenDropdown(null);
           }
+          if (activeTab === 'create' && !insideInteractive) {
+              const ae = document.activeElement;
+              if (ae?.matches?.('input[data-exchange-amount]')) {
+                  ae.blur();
+              }
+          }
       };
-      document.addEventListener('mousedown', handleClickOutside, true);
-      return () => document.removeEventListener('mousedown', handleClickOutside, true);
-  }, [openDropdown]);
+      document.addEventListener('pointerdown', handlePointerOutside, true);
+      return () => document.removeEventListener('pointerdown', handlePointerOutside, true);
+  }, [openDropdown, activeTab]);
 
   useEffect(() => {
       setOpenDropdown(null);
@@ -4962,9 +4988,18 @@ const ExchangeApp = () => {
   const commitPendingSpreadFields = () => {
       orders.forEach((order) => {
           if (!isSpreadPayUsdtMode(order.give, order.get)) return;
+          const rawGet = String(order.getAmount ?? '').trim();
+          const getVal = parseFloat(rawGet);
+          if (Number.isFinite(getVal) && getVal >= MIN_FOREIGN_GET_ARS_PAIRS) {
+              applySpreadPayUsdtCommit(order, 'getAmount', {
+                  giveAmount: order.giveAmount,
+                  getAmount: rawGet,
+              });
+              return;
+          }
           const raw = String(order.giveAmount ?? '').trim();
           const val = parseFloat(raw);
-          if (!Number.isFinite(val) || val < 100) return;
+          if (!Number.isFinite(val) || val < MIN_FOREIGN_GET_ARS_PAIRS) return;
           applySpreadPayUsdtCommit(order, 'giveAmount', {
               giveAmount: raw,
               getAmount: order.getAmount,
@@ -5105,7 +5140,7 @@ const ExchangeApp = () => {
   );
 
   const renderCreateOrder = () => (
-    <div className="flex flex-col px-4 pt-0 pb-24 space-y-4">
+    <div className="flex flex-col px-4 pt-0 pb-24 space-y-4" onFocusCapture={handleFormFocusCapture}>
         <div className="flex justify-between items-center px-2 pt-0 mb-2">
             <div className="flex items-center gap-3">
                 {step > 1 && (<button onClick={prevStep} className={`${isDark ? 'bg-white/10' : 'bg-white'} p-2 rounded-full shadow-sm`}><ArrowLeft size={20}/></button>)}
@@ -5139,6 +5174,7 @@ const ExchangeApp = () => {
                     return (
                     <div
                         key={order.id}
+                        data-order-card={order.id}
                         className={`${exchangeCardBg} rounded-[2rem] p-5 relative overflow-visible ${cardDropdownOpen ? 'z-30' : 'z-0'}`}
                     >
                         {orders.length > 1 && (
@@ -5222,6 +5258,7 @@ const ExchangeApp = () => {
                                             type="text"
                                             inputMode="decimal"
                                             autoComplete="off"
+                                            data-exchange-amount="give"
                                             disabled={!order.give || !order.get}
                                             placeholder="" 
                                             value={order.giveAmount}
@@ -5244,6 +5281,9 @@ const ExchangeApp = () => {
                                                     sanitizeGiveAmountInput(e.target.value);
                                             }}
                                             onBlur={(e) => {
+                                                if (isMovingToSiblingAmountInput(order.id, e.currentTarget)) {
+                                                    return;
+                                                }
                                                 if (isSpreadPayUsdtMode(order.give, order.get)) {
                                                     handleSpreadGiveBlur(
                                                         order,
@@ -5485,6 +5525,7 @@ const ExchangeApp = () => {
                                             type="text"
                                             inputMode="decimal"
                                             autoComplete="off"
+                                            data-exchange-amount="get"
                                             disabled={!order.give || !order.get}
                                             placeholder="" 
                                             value={(() => {
@@ -5567,6 +5608,9 @@ const ExchangeApp = () => {
                                                     sanitizeAmountInput(e.target.value);
                                             }}
                                             onBlur={(e) => {
+                                                if (isMovingToSiblingAmountInput(order.id, e.currentTarget)) {
+                                                    return;
+                                                }
                                                 if (
                                                     isSpreadPayUsdtMode(order.give, order.get)
                                                 ) {
@@ -6145,18 +6189,45 @@ const ExchangeApp = () => {
                     <div className={`h-[1px] ${isDark ? 'bg-white/10' : 'bg-gray-100'}`}></div>
                     
                     {bonuses > 0 && (
-                        <div onClick={() => setUseBonuses(!useBonuses)} className={`p-4 rounded-xl flex items-center justify-between cursor-pointer border transition-all ${useBonuses ? (isDark ? 'border-0 bg-white/5' : 'border-black/10 bg-gray-50') : (isDark ? 'bg-white/5 border-0' : 'bg-gray-50 border-gray-100')}`}>
-                            <div className="flex items-center gap-3">
-                                {/* Иконка: Белая на черном круге */}
-                                <div className={`p-2 rounded-full shadow-sm ${isDark ? 'bg-[#D0FD00] text-black' : 'bg-black text-white'}`}><Gift size={16} strokeWidth={2}/></div>
-                                <div>
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            data-bonus-toggle
+                            onPointerDown={(e) => {
+                                e.preventDefault();
+                                setUseBonuses((v) => !v);
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setUseBonuses((v) => !v);
+                                }
+                            }}
+                            className={`p-4 rounded-xl flex items-center justify-between cursor-pointer border transition-all touch-manipulation select-none ${useBonuses ? (isDark ? 'border-0 bg-white/5' : 'border-black/10 bg-gray-50') : (isDark ? 'bg-white/5 border-0' : 'bg-gray-50 border-gray-100')}`}
+                        >
+                            <div className="flex items-center gap-3 pointer-events-none min-w-0">
+                                <div className={`p-2 rounded-full shadow-sm shrink-0 ${isDark ? 'bg-[#D0FD00] text-black' : 'bg-black text-white'}`}>
+                                    <Gift size={16} strokeWidth={2} />
+                                </div>
+                                <div className="min-w-0">
                                     <div className="text-sm font-bold">{t('ord_bonus_use')}</div>
                                     <div className="text-xs opacity-60">{t('ord_bonus_avail')} {bonuses}</div>
                                 </div>
                             </div>
-                            {/* Чекбокс тоже сделаем построже */}
-                            <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${useBonuses ? 'bg-black border-black text-white' : 'border-gray-300'}`}>
-                                {useBonuses && <CheckCircle size={14} strokeWidth={3} />}
+                            <div
+                                className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-all pointer-events-none ${
+                                    useBonuses
+                                        ? isDark
+                                            ? 'bg-white border-white text-black'
+                                            : 'bg-black border-black text-white'
+                                        : isDark
+                                          ? 'border-white/35 bg-transparent'
+                                          : 'border-gray-300 bg-transparent'
+                                }`}
+                            >
+                                {useBonuses ? (
+                                    <Check size={14} strokeWidth={3} className="block" />
+                                ) : null}
                             </div>
                         </div>
                     )}
