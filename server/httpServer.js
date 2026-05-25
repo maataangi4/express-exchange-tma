@@ -1,15 +1,7 @@
 const http = require('http');
-const ordersStore = require('./ordersStore');
 const walletStore = require('./walletStore');
 const { resolveTelegramUser, getStartParamFromInitData } = require('./telegramAuth');
-const {
-  buildAdminOrderMessage,
-  buildAdminServiceOrderMessage,
-  buildClientOrderNotifyText,
-  buildClientServiceOrderNotifyText,
-} = require('./orderNotifications');
-const { createTelegramApi } = require('./ordersBot');
-const { sendTelegramDocument } = require('./telegramMedia');
+const { submitOrder } = require('./orderSubmit');
 const { fetchExchangeRatesFromSheet } = require('./exchangeRates');
 const { registerAppUserInBase, isConfigured: isSheetsConfigured } = require('./googleSheets');
 
@@ -90,9 +82,6 @@ function createHttpServer(opts) {
   const botTokensForAuth = [miniAppBotToken, ordersBotToken, exexchangeBotToken].filter(
     Boolean
   );
-  const tgOrders = ordersBotToken ? createTelegramApi(ordersBotToken) : null;
-  const tgClient = exexchangeBotToken ? createTelegramApi(exexchangeBotToken) : null;
-
   return http.createServer(async (req, res) => {
     const path = requestPath(req);
 
@@ -310,170 +299,29 @@ function createHttpServer(opts) {
           return;
         }
 
-        const isService =
-          body.orderKind === 'service' ||
-          body.type === 'service' ||
-          String(body.orderId || '').startsWith('SRV-');
-        const orderId =
-          body.orderId ||
-          (isService
-            ? `SRV-${Date.now().toString().slice(-6)}`
-            : `ORD-${Date.now().toString().slice(-6)}`);
-
         const telegramUser = { ...body.telegramUser, ...resolved.user };
-        const telegramUserId = telegramUser.id;
-        const bonusesUsed = isService ? 0 : Math.max(0, Math.floor(Number(body.bonusesUsed) || 0));
-        const cashbackEarned = isService
-          ? 0
-          : Math.max(0, Math.floor(Number(body.cashbackEarned) || 0));
+        const result = await submitOrder({
+          body: { ...body, source: body.source || 'TMA Express Exchange' },
+          telegramUser,
+          ordersBotToken,
+          ordersAdminChatId,
+          clientBotToken: exexchangeBotToken,
+        });
 
-        if (bonusesUsed > 0) {
-          const deduct = walletStore.deductBonuses(telegramUserId, bonusesUsed);
-          if (!deduct.ok) {
+        if (!result.ok) {
+          if (result.error === 'insufficient_bonuses') {
             sendJson(res, 400, {
               ok: false,
-              error: 'insufficient_bonuses',
-              bonuses: deduct.bonuses ?? 0,
+              error: result.error,
+              bonuses: result.bonuses ?? 0,
             });
             return;
           }
-        }
-        const clientName =
-          body.clientName ||
-          [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(' ') ||
-          'Гость';
-        const clientTelegram = telegramUser.username
-          ? `(@${telegramUser.username})`
-          : body.client || '';
-
-        const serviceDetails = body.serviceDetails || body.details || null;
-
-        const order = {
-          ...body,
-          orderId,
-          orderKind: isService ? 'service' : 'exchange',
-          status: 'PENDING',
-          createdAt: new Date().toISOString(),
-          clientName,
-          clientTelegram,
-          telegramUserId,
-          bonusesUsed,
-          cashbackEarned,
-          bonusesDeducted: bonusesUsed > 0,
-          source: 'TMA Express Exchange',
-          serviceDetails: isService ? serviceDetails : undefined,
-          deliveryDate: body.deliveryDate || body.date || null,
-          deliveryTime: body.deliveryTime || body.time || null,
-          deliveryMethod: body.deliveryMethod || body.method,
-          deliveryCost:
-            body.deliveryCost ||
-            (body.deliveryFee === 0 ? '0 USDT' : `${body.deliveryFee ?? 3.5} USDT`),
-        };
-
-        ordersStore.upsert(orderId, order);
-
-        if (tgOrders && ordersAdminChatId) {
-          const text = isService
-            ? buildAdminServiceOrderMessage(order)
-            : buildAdminOrderMessage(order);
-          const sent = await tgOrders('sendMessage', {
-            chat_id: ordersAdminChatId,
-            text,
-            parse_mode: 'HTML',
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '✅ Approve', callback_data: `approve_${orderId}` }],
-                [{ text: '❌ Cancel', callback_data: `reject_${orderId}` }],
-              ],
-            },
-          });
-          if (!sent.ok) {
-            console.error('❌ Failed to notify admin:', sent.description || sent);
-          } else {
-            console.log(`📨 Order ${orderId} → Telegram admin ${ordersAdminChatId}`);
-            const rf = body.receiptFile;
-            if (rf?.dataBase64 && ordersBotToken) {
-              try {
-                const buf = Buffer.from(String(rf.dataBase64), 'base64');
-                const doc = await sendTelegramDocument(ordersBotToken, {
-                  chatId: ordersAdminChatId,
-                  buffer: buf,
-                  filename: rf.name || 'receipt.jpg',
-                  mimeType: rf.mimeType || 'image/jpeg',
-                  caption: `📎 Receipt — <b>#${orderId}</b>`,
-                });
-                if (doc.ok) {
-                  console.log(`📎 Receipt file sent for ${orderId}`);
-                }
-              } catch (docErr) {
-                console.error(`Receipt upload ${orderId}:`, docErr.message || docErr);
-              }
-            }
-          }
-        } else {
-          console.warn('⚠️ ORDERS_BOT_TOKEN или ORDERS_ADMIN_CHAT_ID не заданы');
+          sendJson(res, 500, { ok: false, error: result.error || 'submit_failed' });
+          return;
         }
 
-        if (body.historyItem && telegramUserId) {
-          walletStore.appendOrderHistory(telegramUserId, body.historyItem);
-        } else if (telegramUserId && isService && serviceDetails) {
-          walletStore.appendOrderHistory(telegramUserId, {
-            id: orderId,
-            type: 'service',
-            status: 'pending',
-            timestamp: new Date().toISOString(),
-            details: serviceDetails,
-          });
-        } else if (telegramUserId) {
-          walletStore.appendOrderHistory(telegramUserId, {
-            id: orderId,
-            type: 'exchange',
-            status: 'pending',
-            timestamp: new Date().toISOString(),
-            items: (order.deals || []).map((d) => ({
-              give: d.giveCurrency || d.give,
-              giveAmount: d.giveAmount,
-              get: d.getCurrency || d.get,
-              getAmount: d.getAmount,
-            })),
-            delivery: {
-              method: order.deliveryMethod,
-              address: order.address,
-              date: order.deliveryDate,
-              time: order.deliveryTime,
-            },
-          });
-        }
-
-        if (tgClient && order.telegramUserId && walletStore.shouldSendBotNotifications(order.telegramUserId)) {
-          console.log(`📨 Уведомление клиенту ${order.telegramUserId} (${orderId})`);
-          const customerText = isService
-            ? buildClientServiceOrderNotifyText(order.language || body.language || 'ru', order)
-            : buildClientOrderNotifyText(order.language || body.language || 'ru', {
-                orderId,
-                deals: (order.deals || []).map((d) => ({
-                  give: d.giveCurrency || d.give,
-                  giveAmount: d.giveAmount,
-                  get: d.getCurrency || d.get,
-                  getAmount: d.getAmount,
-                })),
-                deliveryMethod: order.deliveryMethod,
-                address: order.address,
-                date: order.deliveryDate,
-                time: order.deliveryTime,
-                cardAccount: order.cardAccount,
-              });
-          await tgClient('sendMessage', {
-            chat_id: order.telegramUserId,
-            text: customerText,
-            parse_mode: 'HTML',
-          });
-        } else if (tgClient && order.telegramUserId) {
-          console.log(`📨 Клиенту ${order.telegramUserId}: уведомления выключены (${orderId})`);
-        }
-
-        const wallet = walletStore.getWallet(telegramUserId);
-        sendJson(res, 200, { ok: true, orderId, wallet });
+        sendJson(res, 200, { ok: true, orderId: result.orderId, wallet: result.wallet });
       } catch (e) {
         console.error('POST /api/orders:', e.message || e);
         sendJson(res, 500, { ok: false, error: e.message || 'Server error' });

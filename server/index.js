@@ -20,6 +20,8 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const { buildSystemPrompt, matchLocalReply } = require('./knowledge');
 const { getLiveRatesBlock, buildRatesOnlyReply, isRatesQuestion } = require('./liveRatesForBot');
+const chatOrderDraft = require('./chatOrderDraft');
+const { submitOrder } = require('./orderSubmit');
 
 const { createHttpServer } = require('./httpServer');
 
@@ -208,6 +210,14 @@ async function sendText(chatId, text) {
 
 
 
+async function sendHtml(chatId, text) {
+
+  await tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' });
+
+}
+
+
+
 async function askGeminiWithModel(chatId, userText, modelName) {
 
   const chat = getGenerativeModel(modelName).startChat({ history: getHistory(chatId) });
@@ -274,15 +284,60 @@ async function handleMessage(msg) {
 
   const text = (msg.text || '').trim();
 
+  const from = msg.from;
+
   if (!text) return;
+
+
+
+  const draft = chatOrderDraft.getDraft(chatId);
+
+  if (draft.status === 'awaiting_confirm' && chatOrderDraft.isConfirmYes(text)) {
+    const body = chatOrderDraft.buildOrderBodyFromDraft(draft, from);
+    const result = await submitOrder({
+      body,
+      telegramUser: from,
+      ordersBotToken: ORDERS_BOT_TOKEN,
+      ordersAdminChatId: ORDERS_ADMIN_CHAT_ID,
+      clientBotToken: BOT_TOKEN,
+    });
+    chatOrderDraft.clearDraft(chatId);
+    if (result.ok) {
+      await sendText(
+        chatId,
+        `✅ Заявка оформлена!\n\nНомер заказа: ${result.orderId}\n\nМенеджер подтвердит заявку в ближайшее время.`
+      );
+    } else {
+      await sendText(
+        chatId,
+        'Не удалось оформить заказ. Напишите @Natasha_ExpressExchange или оформите в мини-приложении.'
+      );
+    }
+    return;
+  }
+
+  if (draft.status === 'awaiting_confirm' && chatOrderDraft.isConfirmNo(text)) {
+    draft.status = 'collecting';
+    draft.confirmAsked = false;
+    await sendText(chatId, 'Заказ не оформлен. Если захотите продолжить — уточните сумму и доставку.');
+    return;
+  }
+
+  if (draft.status === 'awaiting_confirm') {
+    await sendHtml(
+      chatId,
+      'Для подтверждения напишите <b>ДА</b>.\nЧтобы отменить — <b>НЕТ</b>.'
+    );
+    return;
+  }
 
 
 
   if (text === '/start' || text.startsWith('/start ')) {
     const welcome =
       'Здравствуйте! 👋\n\nЯ помощник Express Exchange — обмен валют в Буэнос-Айресе.\n\n' +
-      'Спросите курс или доставку — отвечу сразу.\n' +
-      'Заявку оформляйте в мини-приложении (кнопка «Открыть»).';
+      'Спросите курс, доставку или заявку — оформим в чате (в конце напишите ДА) или в мини-приложении.\n' +
+      'Могу и по городу: сим-карта, где поесть, районы, транспорт — спрашивайте свободно.';
 
     let extra = '';
     const payload = text.startsWith('/start ') ? text.slice(7).trim() : '';
@@ -338,6 +393,21 @@ async function handleMessage(msg) {
 
     await sendText(chatId, await askGeminiWithFallback(chatId, geminiInput));
 
+    const historyLines = getHistory(chatId).map(
+      (h) => `${h.role === 'user' ? 'Клиент' : 'Бот'}: ${h.parts[0]?.text || ''}`
+    );
+    const updatedDraft = await chatOrderDraft.updateDraftFromMessage(
+      genAI,
+      chatId,
+      text,
+      historyLines
+    );
+    if (chatOrderDraft.isDraftReady(updatedDraft) && !updatedDraft.confirmAsked) {
+      updatedDraft.status = 'awaiting_confirm';
+      updatedDraft.confirmAsked = true;
+      await sendHtml(chatId, chatOrderDraft.formatDraftSummary(updatedDraft));
+    }
+
   } catch (err) {
 
     const local = matchLocalReply(text);
@@ -360,6 +430,21 @@ async function handleMessage(msg) {
         'Сейчас не могу обработать запрос 😔 Напишите @Natasha_ExpressExchange'
 
       );
+
+    const historyLines = getHistory(chatId).map(
+      (h) => `${h.role === 'user' ? 'Клиент' : 'Бот'}: ${h.parts[0]?.text || ''}`
+    );
+    const updatedDraft = await chatOrderDraft.updateDraftFromMessage(
+      genAI,
+      chatId,
+      text,
+      historyLines
+    );
+    if (chatOrderDraft.isDraftReady(updatedDraft) && !updatedDraft.confirmAsked) {
+      updatedDraft.status = 'awaiting_confirm';
+      updatedDraft.confirmAsked = true;
+      await sendHtml(chatId, chatOrderDraft.formatDraftSummary(updatedDraft));
+    }
 
   }
 
